@@ -1,49 +1,66 @@
 
-from langchain.agents import agent_types, AgentExecutor, initialize_agent, Tool, AgentType
-from langchain.memory import ConversationBufferWindowMemory
-from langchain.chat_models import ChatOpenAI
-
-from flask import *
-
-app= Flask(__name__)
-
-llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo")
+import requests
+from vertexai.preview.generative_models import GenerativeModel, Part, FunctionDeclaration, Tool
+import vertexai
 
 
-@app.route('/api/customers', methods=['POST'])
-def hola():
-    response = request.get_json()
-    name = response.get('data').get('name')
-    phone = response.get('data').get('phone')
+def post_info(name, email, phone):
+    data = requests.post('https://strapi-trxe.onrender.com/api/customers',json={
+    "data":{
+        "name": name,
+        "phone": phone,
+        "email": email
+    }
+    }) 
+    return data.text
 
-    def names(input=""):
-        return f"el nombre es {name}"
+def get_info(introduction):
     
-    def phones(input=""):
-        return f"el número de teléfono es {phone}"
+    info = requests.get('https://strapi-trxe.onrender.com/api/courses').text
+    return info
 
-    tool_name = Tool(name="name", func=names, description="Useful for when you need the name of the user or the user request it")
-    
-    tool_phone = Tool(name="phone", func=phones, description="Useful for when you need the phone of the user or the user request it")
+tools = Tool(function_declarations=[
+    FunctionDeclaration(
+        name="post_info", 
+        description="Sube al API la información solicitada",
+        parameters={"type": "object", "properties": 
+                        {"name": {"type": "string", "description": "the name of the user, you will save it on 'name': name and when you have email and phone, post it"},
+                        "email": {"type": "string", "description": "the email of the user, you will save it on 'email': email and when you have name and phone, post it"},
+                        "phone": {"type": "number", "description": "the number phone of the user, you will save it on 'phone': phone and when you have email and name, post it"}
+                        }
+                    }
+    ),
+    FunctionDeclaration(
+        name="get_info", 
+        description="Obtiene los nombres de y la descripción de los cursos",
+        parameters={"type": "object", "properties": {"info": {"type": "string", "description": "the data of each course"}}}
+        )
+])
 
-    tools =[tool_name, tool_phone]
-    memory = ConversationBufferWindowMemory(memory_key="chat_history", k=5, return_messages=True)
-    agent = initialize_agent(
-        agent=AgentType.OPENAI_FUNCTIONS,
-        tools=tools,
-        llm= llm,
-        verbose=True,
-        memory= memory,
-    )
-    response = agent.invoke("what is the name and the phone of the user?")
-    print(response.get('output'))
-    return response.get('output')
+vertexai.init(project="elena-ai-dev")
+model = GenerativeModel('gemini-pro', generation_config={"temperature": 0.2}, tools=[tools])
 
-@app.route('/api/customers', methods=['POST'])
-def main():
-    response = request.get_json()
-    name = response.get('data').get('name')
+chat = model.start_chat()
 
+prompt = "Mi nombre es Ludmila, email Ludmila@gmail.com y número 35895234738"
+response = chat.send_message(prompt)
 
-if __name__ == "__main__":
-    app.run('strapi-trxe.onrender.com')
+function_call = response.candidates[0].content.parts[0].function_call
+function_handlebars = {
+    "get_info": get_info,
+    "post_info": post_info
+}
+
+if function_call.name in function_handlebars:
+    function_name = function_call.name
+
+    args = {key: value for key, value in function_call.args.items()}
+
+    function_response = function_handlebars[function_name](**args)
+
+    print(function_response)
+    response = chat.send_message(Part.from_function_response(name=function_name, response={"content": function_response}))
+    print(response)
+    print(response.candidates[0].content.parts[0].text)
+else:
+    print( "hola")
